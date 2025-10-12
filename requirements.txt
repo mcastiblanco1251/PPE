@@ -1,8 +1,8 @@
-opencv-python-headless==4.8.1.78
+opencv-python-headless
 streamlit
-ultralytics==8.0.0
+ultralytics
 gdown
 Pillow
-numpy==2.0.0
+numpy
 torch
 torchvision
