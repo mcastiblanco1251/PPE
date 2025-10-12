@@ -3,6 +3,6 @@ streamlit
 ultralytics==8.0.0
 gdown
 Pillow
-numpy
+numpy==1.24.3
 torch
 torchvision
