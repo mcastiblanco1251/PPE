@@ -1,7 +1,6 @@
 streamlit
 opencv-python
 ultralytics==8.0.0
-smtplib
 gdown
 Pillow
 numpy
