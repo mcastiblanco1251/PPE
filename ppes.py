@@ -10,9 +10,8 @@ import datetime
 import os
 from PIL import Image
 import io
-import base64
-import time
 import pandas as pd
+#import tempfile
 import gdown
 
 # Configuración de la página
@@ -24,26 +23,27 @@ st.set_page_config(
 
 # Configuración de EPP requerido
 EPP_REQUERIDO = {
-    'gafas': 'Gafas de seguridad',
-    'casco': 'Casco de seguridad', 
-    'mangas': 'Mangas de protección',
-    'tapa_oidos': 'Protección auditiva',
-    'botas': 'Botas de seguridad',
-    'chaleco': 'Chaleco reflectivo',
-    'guantes': 'Guantes de seguridad'
+    'Mask': 'Tapabocas',
+    'Hardhat': 'Casco de seguridad', 
+   
+    
+    
+    'Safety Vest': 'Chaleco reflectivo',
+    
 }
 
 # Mapeo de clases YOLO (ajusta según tu modelo)
-YOLO_CLASSES = {
-    0: 'persona',
-    1: 'gafas',
-    2: 'casco',
-    3: 'mangas', 
-    4: 'tapa_oidos',
-    5: 'botas',
-    6: 'chaleco',
-    7: 'guantes'
-}
+YOLO_CLASSES = {0:'Hardhat', 1:'Mask', 2:'NO-Hardhat', 3:'NO-Mask', 4:'NO-Safety Vest', 5:'Person', 6:'Safety Cone', 7:'Safety Vest', 8:'machinery', 9:'vehicle'}
+#{
+#     0: 'botas',
+#     1: 'gafas',
+#     2: 'casco',
+#     3: 'mangas', 
+#     4: 'tapa_oidos',
+#     5: 'persona',
+#     6: 'persona',
+#     7: 'guantes'
+# }
 
 @st.cache_resource
 def load_model():
@@ -55,7 +55,12 @@ def load_model():
     model = YOLO(model_path)
     return model
 
+# Inicializar variables de sesión
+if 'violation_log' not in st.session_state:
+    st.session_state.violation_log = []
 
+if 'processed_images' not in st.session_state:
+    st.session_state.processed_images = {}
 
 class EPPDetector:
     def __init__(self, model_path):
@@ -63,8 +68,10 @@ class EPPDetector:
         try:
             self.model = YOLO(model_path)
             self.confidence_threshold = 0.5
+            st.success("✅ Modelo YOLO cargado exitosamente")
         except Exception as e:
-            st.error(f"Error al cargar el modelo: {e}")
+            st.error(f"❌ Error al cargar el modelo: {e}")
+            st.info("Por favor, sube tu archivo de modelo YOLO (.pt)")
             self.model = None
     
     def detect_epp(self, image):
@@ -89,10 +96,11 @@ class EPPDetector:
                     
                     if class_id in YOLO_CLASSES:
                         class_name = YOLO_CLASSES[class_id]
-                        if class_name == 'persona':
+                        if class_name == 'Person':
                             persons_detected += 1
                         else:
                             detected_epp.add(class_name)
+                            
         
         # Verificar cumplimiento
         required_epp = set(EPP_REQUERIDO.keys())
@@ -115,7 +123,6 @@ class EPPDetector:
             boxes = result.boxes
             if boxes is not None:
                 for box in boxes:
-                    # Obtener coordenadas
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     confidence = float(box.conf[0])
                     class_id = int(box.cls[0])
@@ -125,30 +132,33 @@ class EPPDetector:
                         
                         # Color según la clase
                         if class_name == 'persona':
-                            color = (0, 255, 0)  # Verde para persona
+                            color = (0, 255, 0)
                         else:
-                            color = (255, 0, 0)  # Rojo para EPP
+                            color = (255, 165, 0)
                         
                         # Dibujar rectángulo
-                        cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
+                        cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 3)
                         
                         # Dibujar etiqueta
                         label = f"{class_name}: {confidence:.2f}"
-                        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
-                        cv2.rectangle(annotated_image, (x1, y1 - 20), (x1 + w, y1), color, -1)
-                        cv2.putText(annotated_image, label, (x1, y1 - 5), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+                        (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+                        cv2.rectangle(annotated_image, (x1, y1 - 30), (x1 + w + 10, y1), color, -1)
+                        cv2.putText(annotated_image, label, (x1 + 5, y1 - 8), 
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
         return annotated_image
 
-def send_email_alert(image, analysis, sender_email,recipient_email, sender_password):
+def send_email_alert(image_bytes, analysis, recipient_email, sender_config):
     """Enviar alerta por email"""
     try:
-        # Configurar servidor SMTP (ajustar según tu proveedor)
-        smtp_server = "smtp.gmail.com"  # Cambiar por tu servidor
-        smtp_port = 587
-        sender_email = sender_email  # Cambiar por tu email
-        sender_password = sender_password  # Usar variable de entorno en producción
+        smtp_server = sender_config.get('smtp_server', 'smtp.gmail.com')
+        smtp_port = sender_config.get('smtp_port', 587)
+        sender_email = sender_config.get('sender_email')
+        sender_password = sender_config.get('sender_password')
+        
+        if not all([sender_email, sender_password]):
+            st.warning("⚠️ Configuración de email incompleta. No se enviará el correo.")
+            return False
         
         # Crear mensaje
         msg = MIMEMultipart()
@@ -161,39 +171,34 @@ def send_email_alert(image, analysis, sender_email,recipient_email, sender_passw
         detected_items = [EPP_REQUERIDO.get(item, item) for item in analysis['detected_epp']]
         
         body = f"""
-        🚨 ALERTA DE SEGURIDAD - INCUMPLIMIENTO EPP DETECTADO 🚨
-        
-        Fecha y Hora: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        
-        DETALLES DEL INCUMPLIMIENTO:
-        📊 Personas detectadas: {analysis['persons_detected']}
-        ✅ EPP Detectado: {', '.join(detected_items) if detected_items else 'Ninguno'}
-        ❌ EPP Faltante: {', '.join(missing_items)}
-        
-        ACCIÓN REQUERIDA:
-        Por favor, verificar inmediatamente el cumplimiento de normas de seguridad en el área.
-        
-        Este mensaje fue generado automáticamente por el Sistema de Detección EPP.
-        
-        ---
-        Departamento HSE
+🚨 ALERTA DE SEGURIDAD - INCUMPLIMIENTO EPP DETECTADO 🚨
+
+Fecha y Hora: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+DETALLES DEL INCUMPLIMIENTO:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 Personas detectadas: {analysis['persons_detected']}
+✅ EPP Detectado: {', '.join(detected_items) if detected_items else 'Ninguno'}
+❌ EPP Faltante: {', '.join(missing_items)}
+
+ACCIÓN REQUERIDA:
+Por favor, verificar inmediatamente el cumplimiento de normas de seguridad en el área.
+
+Este mensaje fue generado automáticamente por el Sistema de Detección EPP.
+
+---
+ Departamento HSE
+Sistema de Monitoreo Automático
         """
         
         msg.attach(MIMEText(body, 'plain'))
         
         # Adjuntar imagen
-        if image is not None:
-            img_buffer = io.BytesIO()
-            cv2.imwrite('temp_violation.jpg', image)
-            with open('temp_violation.jpg', 'rb') as f:
-                img_data = f.read()
-            
-            img_attachment = MIMEImage(img_data)
-            img_attachment.add_header('Content-Disposition', 'attachment', filename='incumplimiento_epp.jpg')
+        if image_bytes is not None:
+            img_attachment = MIMEImage(image_bytes)
+            img_attachment.add_header('Content-Disposition', 'attachment', 
+                                     filename=f'incumplimiento_epp_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.jpg')
             msg.attach(img_attachment)
-            
-            # Limpiar archivo temporal
-            os.remove('temp_violation.jpg')
         
         # Enviar email
         server = smtplib.SMTP(smtp_server, smtp_port)
@@ -206,297 +211,551 @@ def send_email_alert(image, analysis, sender_email,recipient_email, sender_passw
         return True
         
     except Exception as e:
-        st.error(f"Error al enviar email: {e}")
+        st.error(f"❌ Error al enviar email: {e}")
         return False
 
-def save_violation_record(image, analysis):
-    """Guardar registro de violación"""
-    timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"violation_{timestamp}.jpg"
+def save_violation_record(image_np, analysis):
+    """Guardar registro de violación en memoria"""
+    timestamp = datetime.datetime.now()
     
-    # Crear directorio si no existe
-    os.makedirs("violations", exist_ok=True)
+    # Convertir imagen a bytes para almacenar
+    is_success, buffer = cv2.imencode(".jpg", image_np)
+    image_bytes = buffer.tobytes()
     
-    # Guardar imagen
-    filepath = os.path.join("violations", filename)
-    cv2.imwrite(filepath, image)
-    
-    # Guardar registro en CSV
     record = {
-        'timestamp': datetime.datetime.now(),
-        'filename': filename,
+        'timestamp': timestamp,
+        'datetime_str': timestamp.strftime('%Y-%m-%d %H:%M:%S'),
         'persons_detected': analysis['persons_detected'],
-        'missing_epp': ', '.join(analysis['missing_epp']),
-        'detected_epp': ', '.join(analysis['detected_epp'])
+        'missing_epp': ', '.join([EPP_REQUERIDO[item] for item in analysis['missing_epp']]),
+        'detected_epp': ', '.join([EPP_REQUERIDO.get(item, item) for item in analysis['detected_epp']]),
+        'image': image_bytes
     }
     
-    csv_file = "violations/violation_log.csv"
-    df = pd.DataFrame([record])
+    st.session_state.violation_log.append(record)
     
-    if os.path.exists(csv_file):
-        df.to_csv(csv_file, mode='a', header=False, index=False)
-    else:
-        df.to_csv(csv_file, index=False)
-    
-    return filepath
+    return record
 
 def main():
     st.title("🛡️ Sistema de Detección de Elementos de Protección Personal (EPP)")
+    #st.markdown("### AGP Glass - Sistema en la Nube")
     st.markdown("---")
     
     # Sidebar para configuración
-    st.sidebar.header("⚙️ Configuración")
+    with st.sidebar:
+        st.header("⚙️ Configuración del Sistema")
+        
+        # Cargar modelo YOLO
+        st.subheader("📦 Modelo YOLO")
+        # uploaded_model = st.file_uploader("Cargar modelo YOLO (.pt)", type=['pt'])
+        
+        
+        uploaded_model='Epp8v.pt'
+        
+        if uploaded_model is not None:
+            model_path = load_model()
+            # Guardar modelo temporalmente
+            # with tempfile.NamedTemporaryFile(delete=False, suffix='.pt') as tmp_file:
+            #     tmp_file.write(uploaded_model.read())
+            #     model_path = tmp_file.name
+            
+            # Inicializar detector
+
+
+            if 'detector' not in st.session_state or st.session_state.get('current_model') != uploaded_model:
+                st.session_state.detector = EPPDetector(model_path)
+                st.session_state.current_model = uploaded_model
+                model_loaded = True
+            else:
+                model_loaded = True
+        else:
+            # Intentar usar modelo por defecto
+            if os.path.exists('best.pt'):
+                if 'detector' not in st.session_state:
+                    st.session_state.detector = EPPDetector('best.pt')
+                model_loaded = True
+            else:
+                st.warning("⚠️ Por favor, carga tu modelo YOLO entrenado")
+        
+        if model_loaded and hasattr(st.session_state, 'detector'):
+            # Configuración de detección
+            st.subheader("🎯 Parámetros de Detección")
+            confidence = st.slider("Umbral de confianza:", 0.1, 1.0, 0.5, 0.05)
+            st.session_state.detector.confidence_threshold = confidence
+            
+
+            # EPP Requerido
+            st.subheader("✅ EPP Requerido")
+            for key, value in EPP_REQUERIDO.items():
+                st.checkbox(value, value=True, key=f"epp_{key}", disabled=True)
+            
+            st.markdown("---")
+            
+            # Configuración de email
+            st.subheader("📧 Configuración Email")
+            email_enabled = st.checkbox("Activar alertas por email", value=False)
+            
+            if email_enabled:
+                recipient_email = st.text_input("Email destinatario:", 
+                                               value="Persona HSE e-mail")
+                
+                with st.expander("⚙️ Configuración SMTP"):
+                    smtp_server = st.text_input("Servidor SMTP:", value="smtp.gmail.com")
+                    smtp_port = st.number_input("Puerto SMTP:", value=587)
+                    sender_email = st.text_input("Email remitente:")
+                    sender_password = st.text_input("Contraseña/Token:", type="password")
+                    
+                    st.info("""
+                    💡 **Tip para Gmail:**
+                    1. Activa la verificación en 2 pasos
+                    2. Genera una "Contraseña de aplicación"
+                    3. Usa esa contraseña aquí
+                    """)
+                    
+                    sender_config = {
+                        'smtp_server': smtp_server,
+                        'smtp_port': smtp_port,
+                        'sender_email': sender_email,
+                        'sender_password': sender_password
+                    }
+            else:
+                recipient_email = "infraccion_hse@agpglass.com"
+                sender_config = {}
+        
+        st.markdown("---")
+        st.markdown("""
+        <div style='text-align: center; font-size: 12px;'>
+            <p>🛡️ Sistema EPP v2.0<br>Optimizado para Streamlit Cloud</p>
+        </div>
+        """, unsafe_allow_html=True)
     
-    # Cargar modelo
-    model_path = load_model()#'../Eppv8.pt' #st.sidebar.text_input("Ruta del modelo YOLO:", value='../Project3-PPE-Detection/Eppv8.pt')
-    confidence = st.sidebar.slider("Umbral de confianza:", 0.1, 1.0, 0.5, 0.1)
-    
-    # Configuración de email
-    st.sidebar.subheader("📧 Configuración Email")
-    email_enabled = st.sidebar.checkbox("Activar alertas por email", value=False)
-    recipient_email = st.sidebar.text_input("Email destinatario:", value="e-mail")
-    sender_email = st.sidebar.text_input("Email salida:", value=" tu e-mail")
-    sender_password=st.sidebar.text_input("Contraseña del mail:", value="contraseña tu e-mail", type="password")
-    # Inicializar detector
-    if 'detector' not in st.session_state:
-        st.session_state.detector = EPPDetector(model_path)
-        st.session_state.detector.confidence_threshold = confidence
-    
-    # Actualizar umbral de confianza
-    st.session_state.detector.confidence_threshold = confidence
+    # Verificar si el modelo está cargado
+    if not model_loaded:
+        st.warning("⚠️ Por favor, carga tu modelo YOLO desde la barra lateral para comenzar")
+        return
     
     # Pestañas principales
-    tab1, tab2, tab3 = st.tabs(["📁 Análisis de Imagen","📷 Detección en Tiempo Real",  "📊 Historial"])
-    
-    with tab2:
-        st.header("Detección en Tiempo Real")
-        
-        # Controles de cámara
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            start_camera = st.button("🎥 Iniciar Cámara", type="primary")
-        
-        with col2:
-            stop_camera = st.button("⏹️ Detener Cámara")
-        
-        with col3:
-            capture_frame = st.button("📸 Capturar Frame")
-        
-        # Placeholder para video
-        video_placeholder = st.empty()
-        alert_placeholder = st.empty()
-        
-        # Inicializar estado de cámara
-        if 'camera_active' not in st.session_state:
-            st.session_state.camera_active = False
-        
-        if start_camera:
-            st.session_state.camera_active = True
-        
-        if stop_camera:
-            st.session_state.camera_active = False
-        
-        # Procesamiento de video en tiempo real
-        if st.session_state.camera_active:
-            cap = cv2.VideoCapture(0)  # Usar cámara por defecto
-            
-            if not cap.isOpened():
-                st.error("No se pudo acceder a la cámara")
-            else:
-                stframe = st.empty()
-                
-                while st.session_state.camera_active:
-                    ret, frame = cap.read()
-                    if not ret:
-                        st.error("Error al capturar frame")
-                        break
-                    
-                    # Procesar frame
-                    results, _ = st.session_state.detector.detect_epp(frame)
-                    
-                    if results:
-                        # Analizar cumplimiento
-                        analysis = st.session_state.detector.analyze_compliance(results)
-                        
-                        # Dibujar detecciones
-                        annotated_frame = st.session_state.detector.draw_detections(frame, results)
-                        
-                        # Mostrar estado de cumplimiento
-                        if not analysis['compliant'] and analysis['persons_detected'] > 0:
-                            # Mostrar alerta
-                            cv2.putText(annotated_frame, "¡INCUMPLIMIENTO DETECTADO!", (10, 30),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                            
-                            missing_text = f"Falta: {', '.join([EPP_REQUERIDO[item] for item in analysis['missing_epp']])}"
-                            cv2.putText(annotated_frame, missing_text, (10, 70),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                        
-                        # Mostrar frame
-                        stframe.image(annotated_frame, channels="BGR", use_container_width=True)
-                        
-                        # Capturar violación si se presiona el botón
-                        if capture_frame and not analysis['compliant'] and analysis['persons_detected'] > 0:
-                            # Guardar registro
-                            filepath = save_violation_record(annotated_frame, analysis)
-                            
-                            # Enviar email si está habilitado
-                            if email_enabled:
-                                if send_email_alert(annotated_frame, analysis, recipient_email):
-                                    st.success("✅ Alerta enviada por email exitosamente")
-                                else:
-                                    st.error("❌ Error al enviar email")
-                            
-                            st.success(f"📸 Violación registrada: {filepath}")
-                            
-                            # Mostrar alerta en la interfaz
-                            with alert_placeholder.container():
-                                st.error(f"""
-                                🚨 **INCUMPLIMIENTO DETECTADO**
-                                
-                                👥 Personas: {analysis['persons_detected']}
-                                
-                                ❌ **EPP Faltante:**
-                                {chr(10).join([f"• {EPP_REQUERIDO[item]}" for item in analysis['missing_epp']])}
-                                
-                                ✅ **EPP Detectado:**
-                                {chr(10).join([f"• {EPP_REQUERIDO.get(item, item)}" for item in analysis['detected_epp']]) if analysis['detected_epp'] else "• Ninguno"}
-                                """)
-                    
-                    time.sleep(0.1)  # Pequeña pausa para no sobrecargar
-                
-                cap.release()
+    tab1, tab2, tab3, tab4 = st.tabs(["📤 Carga de Imágenes", "📸 Captura desde Navegador", "📊 Historial", "ℹ️ Información"])
     
     with tab1:
-        st.header("Análisis de Imagen")
-        st.markdown("Sube una imagen de una persona y detecta sus EPPs")
-
-        uploaded_file = st.file_uploader("Cargar imagen", type=['jpg', 'jpeg', 'png'])
+        st.header("📤 Análisis de Imágenes Cargadas")
+        st.info("💡 Puedes cargar múltiples imágenes para análisis por lotes")
         
-        if uploaded_file is not None:
-            # Leer imagen
-            image = Image.open(uploaded_file)
+        uploaded_files = st.file_uploader(
+            "Cargar imágenes para análisis", 
+            type=['jpg', 'jpeg', 'png'],
+            accept_multiple_files=True
+        )
+        
+        if uploaded_files:
+            st.subheader(f"📁 {len(uploaded_files)} imagen(es) cargada(s)")
+            
+            for idx, uploaded_file in enumerate(uploaded_files):
+                st.markdown(f"### Imagen {idx + 1}: {uploaded_file.name}")
+                
+                # Leer imagen
+                image = Image.open(uploaded_file)
+                image_np = np.array(image)
+                image_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("🖼️ Original")
+                    st.image(image, use_container_width=True)
+                
+                # Procesar imagen
+                with st.spinner('🔍 Analizando imagen...'):
+                    results, _ = st.session_state.detector.detect_epp(image_cv)
+                
+                if results:
+                    # Analizar cumplimiento
+                    analysis = st.session_state.detector.analyze_compliance(results)
+                    
+                    # Dibujar detecciones
+                    annotated_image = st.session_state.detector.draw_detections(image_cv, results)
+                    
+                    # Agregar banner de estado en la imagen
+                    if not analysis['compliant'] and analysis['persons_detected'] > 0:
+                        h, w = annotated_image.shape[:2]
+                        cv2.rectangle(annotated_image, (0, 0), (w, 60), (0, 0, 255), -1)
+                        cv2.putText(annotated_image, "INCUMPLIMIENTO DETECTADO!", (10, 40),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                    elif analysis['compliant'] and analysis['persons_detected'] > 0:
+                        h, w = annotated_image.shape[:2]
+                        cv2.rectangle(annotated_image, (0, 0), (w, 60), (0, 255, 0), -1)
+                        cv2.putText(annotated_image, "CUMPLIMIENTO VERIFICADO", (10, 40),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                    
+                    annotated_image_rgb = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
+                    
+                    with col2:
+                        st.subheader("🔍 Análisis")
+                        st.image(annotated_image_rgb, use_container_width=True)
+                    
+                    # Mostrar resultados
+                    st.markdown("---")
+                    
+                    # Métricas
+                    metric_col1, metric_col2, metric_col3 = st.columns(3)
+                    
+                    with metric_col1:
+                        st.metric("👥 Personas", analysis['persons_detected'])
+                    
+                    with metric_col2:
+                        compliance_status = "✅ CUMPLE" if analysis['compliant'] else "❌ NO CUMPLE"
+                        compliance_color = "normal" if analysis['compliant'] else "inverse"
+                        st.metric("Estado", compliance_status)
+                    
+                    with metric_col3:
+                        st.metric("🛡️ EPP Detectados", len(analysis['detected_epp']))
+                    
+                    # Detalles
+                    if not analysis['compliant'] and analysis['persons_detected'] > 0:
+                        st.error(f"""
+                        ### 🚨 INCUMPLIMIENTO DETECTADO
+                        
+                        **❌ EPP Faltante:**
+                        {chr(10).join([f"• {EPP_REQUERIDO[item]}" for item in analysis['missing_epp']])}
+                        """)
+                        
+                        # Acciones
+                        col_a, col_b = st.columns(2)
+                        
+                        with col_a:
+                            if st.button(f"📝 Registrar Violación", key=f"reg_{idx}"):
+                                record = save_violation_record(annotated_image, analysis)
+                                st.success("✅ Violación registrada en el historial")
+                        
+                        with col_b:
+                            if email_enabled and st.button(f"📧 Enviar Alerta", key=f"email_{idx}"):
+                                with st.spinner("Enviando email..."):
+                                    is_success, buffer = cv2.imencode(".jpg", annotated_image)
+                                    image_bytes = buffer.tobytes()
+                                    
+                                    if send_email_alert(image_bytes, analysis, recipient_email, sender_config):
+                                        st.success("✅ Alerta enviada por email exitosamente")
+                                        # También registrar
+                                        save_violation_record(annotated_image, analysis)
+                                    else:
+                                        st.error("❌ Error al enviar email")
+                    
+                    elif analysis['persons_detected'] > 0:
+                        st.success(f"""
+                        ### ✅ CUMPLIMIENTO VERIFICADO
+                        
+                        **EPP Detectado:**
+                        {chr(10).join([f"• {EPP_REQUERIDO.get(item, item)}" for item in analysis['detected_epp']])}
+                        """)
+                    else:
+                        st.warning("⚠️ No se detectaron personas en la imagen")
+                    
+                    # Descargar imagen analizada
+                    buf = io.BytesIO()
+                    Image.fromarray(annotated_image_rgb).save(buf, format='JPEG')
+                    st.download_button(
+                        label="⬇️ Descargar imagen analizada",
+                        data=buf.getvalue(),
+                        file_name=f"analisis_{uploaded_file.name}",
+                        mime="image/jpeg",
+                        key=f"download_{idx}"
+                    )
+                
+                st.markdown("---")
+    
+    with tab2:
+        st.header("📸 Captura desde Navegador")
+        st.info("""
+        💡 **Instrucciones:**
+        1. Haz clic en "Tomar foto"
+        2. Permite el acceso a la cámara en tu navegador
+        3. Captura la imagen
+        4. El sistema analizará automáticamente el EPP
+        """)
+        
+        # Widget de cámara de Streamlit
+        camera_photo = st.camera_input("📷 Tomar foto")
+        
+        if camera_photo is not None:
+            # Procesar la foto capturada
+            image = Image.open(camera_photo)
             image_np = np.array(image)
             image_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
             
-            # Mostrar imagen original
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("Imagen Original")
-                st.image(image,use_container_width=True)
+                st.subheader("📸 Foto Capturada")
+                st.image(image, use_container_width=True)
             
             # Procesar imagen
-            results, _ = st.session_state.detector.detect_epp(image_cv)
+            with st.spinner('🔍 Analizando en tiempo real...'):
+                results, _ = st.session_state.detector.detect_epp(image_cv)
             
             if results:
-                # Analizar cumplimiento
                 analysis = st.session_state.detector.analyze_compliance(results)
-                
-                # Dibujar detecciones
                 annotated_image = st.session_state.detector.draw_detections(image_cv, results)
+                
+                # Banner de estado
+                if not analysis['compliant'] and analysis['persons_detected'] > 0:
+                    h, w = annotated_image.shape[:2]
+                    cv2.rectangle(annotated_image, (0, 0), (w, 60), (0, 0, 255), -1)
+                    cv2.putText(annotated_image, "INCUMPLIMIENTO DETECTADO!", (10, 40),
+                              cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                elif analysis['compliant'] and analysis['persons_detected'] > 0:
+                    h, w = annotated_image.shape[:2]
+                    cv2.rectangle(annotated_image, (0, 0), (w, 60), (0, 255, 0), -1)
+                    cv2.putText(annotated_image, "CUMPLIMIENTO VERIFICADO", (10, 40),
+                              cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                
                 annotated_image_rgb = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
                 
                 with col2:
-                    st.subheader("Resultado del Análisis")
+                    st.subheader("🔍 Resultado")
                     st.image(annotated_image_rgb, use_container_width=True)
                 
-                # Mostrar resultados
                 st.markdown("---")
-                st.subheader("📊 Resultados del Análisis")
                 
-                col1, col2, col3 = st.columns(3)
+                # Métricas
+                m1, m2, m3 = st.columns(3)
+                with m1:
+                    st.metric("👥 Personas", analysis['persons_detected'])
+                with m2:
+                    status = "✅ CUMPLE" if analysis['compliant'] else "❌ NO CUMPLE"
+                    st.metric("Estado", status)
+                with m3:
+                    st.metric("🛡️ EPP Detectados", len(analysis['detected_epp']))
                 
-                with col1:
-                    st.metric("Personas Detectadas", analysis['persons_detected'])
-                
-                with col2:
-                    compliance_status = "✅ CUMPLE" if analysis['compliant'] else "❌ NO CUMPLE"
-                    st.metric("Estado", compliance_status)
-                
-                with col3:
-                    st.metric("EPP Detectados", len(analysis['detected_epp']))
-                
-                # Detalles del análisis
+                # Resultados detallados
                 if not analysis['compliant'] and analysis['persons_detected'] > 0:
                     st.error(f"""
-                    🚨 **INCUMPLIMIENTO DETECTADO**
+                    ### 🚨 INCUMPLIMIENTO DETECTADO
                     
-                    ❌ **EPP Faltante:**
+                    **❌ EPP Faltante:**
                     {chr(10).join([f"• {EPP_REQUERIDO[item]}" for item in analysis['missing_epp']])}
                     """)
                     
-                    # Botón para registrar violación
-                    if st.button("📝 Registrar Violación"):
-                        filepath = save_violation_record(annotated_image, analysis)
-                        
-                        if email_enabled:
-                            if send_email_alert(annotated_image, analysis, recipient_email):
-                                st.success("✅ Violación registrada y alerta enviada por email")
-                            else:
-                                st.warning("⚠️ Violación registrada pero error al enviar email")
-                        else:
+                    col_x, col_y = st.columns(2)
+                    
+                    with col_x:
+                        if st.button("📝 Registrar Violación", key="reg_cam"):
+                            record = save_violation_record(annotated_image, analysis)
                             st.success("✅ Violación registrada")
+                    
+                    with col_y:
+                        if email_enabled and st.button("📧 Enviar Alerta HSE", key="email_cam"):
+                            with st.spinner("Enviando..."):
+                                is_success, buffer = cv2.imencode(".jpg", annotated_image)
+                                image_bytes = buffer.tobytes()
+                                
+                                if send_email_alert(image_bytes, analysis, recipient_email, sender_config):
+                                    st.success("✅ Alerta enviada")
+                                    save_violation_record(annotated_image, analysis)
                 
-                if analysis['detected_epp']:
+                elif analysis['persons_detected'] > 0:
                     st.success(f"""
-                    ✅ **EPP Detectado:**
+                    ### ✅ CUMPLIMIENTO VERIFICADO
+                    
+                    **EPP Detectado:**
                     {chr(10).join([f"• {EPP_REQUERIDO.get(item, item)}" for item in analysis['detected_epp']])}
                     """)
     
     with tab3:
         st.header("📊 Historial de Violaciones")
         
-        # Verificar si existe el archivo de registro
-        csv_file = "violations/violation_log.csv"
-        
-        if os.path.exists(csv_file):
-            df = pd.read_csv(csv_file)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+        if st.session_state.violation_log:
+            st.subheader(f"📋 Total de violaciones registradas: {len(st.session_state.violation_log)}")
             
-            st.subheader(f"Total de violaciones: {len(df)}")
+            # Botones de acción
+            col_btn1, col_btn2 = st.columns(2)
             
-            # Filtros
-            col1, col2 = st.columns(2)
+            with col_btn1:
+                if st.button("🗑️ Limpiar historial"):
+                    st.session_state.violation_log = []
+                    st.rerun()
             
-            with col1:
-                start_date = st.date_input("Fecha inicio:", value=df['timestamp'].min().date())
+            with col_btn2:
+                # Exportar a CSV
+                if st.session_state.violation_log:
+                    df_export = pd.DataFrame([{
+                        'Fecha y Hora': r['datetime_str'],
+                        'Personas': r['persons_detected'],
+                        'EPP Faltante': r['missing_epp'],
+                        'EPP Detectado': r['detected_epp']
+                    } for r in st.session_state.violation_log])
+                    
+                    csv = df_export.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Descargar CSV",
+                        data=csv,
+                        file_name=f"reporte_violaciones_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
+                        mime="text/csv"
+                    )
             
-            with col2:
-                end_date = st.date_input("Fecha fin:", value=df['timestamp'].max().date())
+            st.markdown("---")
             
-            # Filtrar datos
-            mask = (df['timestamp'].dt.date >= start_date) & (df['timestamp'].dt.date <= end_date)
-            filtered_df = df.loc[mask]
-            
-            # Mostrar tabla
-            st.dataframe(filtered_df, use_container_width=True)
+            # Mostrar cada registro
+            for idx, record in enumerate(reversed(st.session_state.violation_log)):
+                with st.expander(f"🚨 Violación #{len(st.session_state.violation_log) - idx} - {record['datetime_str']}"):
+                    col1, col2 = st.columns([1, 2])
+                    
+                    with col1:
+                        # Mostrar imagen
+                        img_array = np.frombuffer(record['image'], dtype=np.uint8)
+                        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                        st.image(img_rgb, use_container_width=True)
+                    
+                    with col2:
+                        st.markdown(f"""
+                        **📅 Fecha:** {record['datetime_str']}  
+                        **👥 Personas detectadas:** {record['persons_detected']}  
+                        **❌ EPP Faltante:** {record['missing_epp']}  
+                        **✅ EPP Detectado:** {record['detected_epp']}
+                        """)
+                        
+                        # Descargar imagen individual
+                        buf = io.BytesIO(record['image'])
+                        st.download_button(
+                            label="⬇️ Descargar imagen",
+                            data=buf.getvalue(),
+                            file_name=f"violacion_{record['datetime_str'].replace(':', '-').replace(' ', '_')}.jpg",
+                            mime="image/jpeg",
+                            key=f"dl_{idx}"
+                        )
             
             # Estadísticas
-            if len(filtered_df) > 0:
-                st.subheader("📈 Estadísticas")
-                
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Violaciones en período", len(filtered_df))
-                
-                with col2:
-                    avg_persons = filtered_df['persons_detected'].mean()
-                    st.metric("Promedio personas/violación", f"{avg_persons:.1f}")
-                
-                with col3:
-                    total_persons = filtered_df['persons_detected'].sum()
-                    st.metric("Total personas involucradas", total_persons)
+            st.markdown("---")
+            st.subheader("📈 Estadísticas Generales")
+            
+            total_persons = sum(r['persons_detected'] for r in st.session_state.violation_log)
+            avg_persons = total_persons / len(st.session_state.violation_log) if st.session_state.violation_log else 0
+            
+            stat1, stat2, stat3 = st.columns(3)
+            
+            with stat1:
+                st.metric("Total Violaciones", len(st.session_state.violation_log))
+            
+            with stat2:
+                st.metric("Total Personas Involucradas", total_persons)
+            
+            with stat3:
+                st.metric("Promedio Personas/Violación", f"{avg_persons:.1f}")
         
         else:
-            st.info("No hay registros de violaciones aún.")
+            st.info("📭 No hay violaciones registradas aún")
+            st.markdown("""
+            Las violaciones se registrarán automáticamente cuando:
+            - Se detecte un incumplimiento de EPP
+            - Se presione el botón "Registrar Violación"
+            - Se envíe una alerta por email
+            """)
+    
+    with tab4:
+        st.header("ℹ️ Información del Sistema")
+        
+        st.markdown("""
+        ### 🛡️ Sistema de Detección EPP
+        
+        **Versión:** 2.0 Cloud Edition  
+        **Optimizado para:** Streamlit Cloud
+        
+        ---
+        
+        ### 📋 EPP Monitoreado
+        """)
+        
+        for key, value in EPP_REQUERIDO.items():
+            st.markdown(f"- ✅ **{value}**")
+        
+        st.markdown("""
+        ---
+        
+        ### 🚀 Características
+        
+        1. **Análisis por Lotes**
+           - Carga múltiples imágenes simultáneamente
+           - Procesamiento automático de cada imagen
+        
+        2. **Captura desde Navegador**
+           - Usa la cámara de tu dispositivo
+           - Análisis en tiempo real
+        
+        3. **Alertas Automáticas**
+           - Envío de emails al detectar incumplimientos
+           - Registro fotográfico automático
+        
+        4. **Historial Completo**
+           - Almacenamiento de todas las violaciones
+           - Exportación a CSV
+           - Descarga de imágenes
+        
+        5. **Compatible con Móviles**
+           - Funciona en smartphones y tablets
+           - Interfaz responsive
+        
+        ---
+        
+        ### 🔧 Configuración Recomendada
+        
+        #### Para Gmail:
+        1. Ve a tu cuenta de Google
+        2. Seguridad → Verificación en 2 pasos (actívala)
+        3. Contraseñas de aplicaciones → Genera una nueva
+        4. Usa esa contraseña en la configuración SMTP
+        
+        #### Para Outlook/Office 365:
+        ```
+        Servidor: smtp.office365.com
+        Puerto: 587
+        ```
+        
+        #### Para otros proveedores:
+        Consulta la documentación de tu proveedor de email
+        
+        ---
+        
+        ### 📞 Soporte
+        
+        Para reportar problemas o sugerencias:
+        - 📧 Email: infraccion_hse@agpglass.com
+        - 🏢 Departamento: HSE - AGP Glass
+        
+        ---
+        
+        ### 🔒 Privacidad y Seguridad
+        
+        - Las imágenes se procesan en memoria
+        - No se almacenan en servidor permanentemente
+        - Los datos se pierden al cerrar la sesión (por seguridad)
+        - Para almacenamiento permanente, descarga los reportes CSV
+        
+        ---
+        
+        ### 💡 Consejos de Uso
+        
+        ✅ **Recomendaciones:**
+        - Usa buena iluminación para mejores resultados
+        - Asegúrate que las personas estén completamente visibles
+        - Mantén una distancia apropiada (2-5 metros)
+        - Evita imágenes borrosas o con mucho movimiento
+        
+        ❌ **Evita:**
+        - Ángulos muy cerrados o distantes
+        - Contraluz fuerte
+        - Obstrucciones parciales
+        - Múltiples personas superpuestas
+        """)
     
     # Footer
     st.markdown("---")
     st.markdown("""
-    <div style='text-align: center'>
-        <p>🛡️ Sistema de Detección EPP | Desarrollado por SAINECO/p>
+    <div style='text-align: center; padding: 20px;'>
+        <p style='font-size: 14px;'>
+            🛡️ <b>Sistema de Detección EPP v2.0</b><br>
+            AGP Glass - Departamento HSE<br>
+            Desarrollado con ❤️ usando Streamlit + YOLO v8<br>
+            <i>Optimizado para Streamlit Cloud</i>
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
