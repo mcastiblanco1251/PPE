@@ -1,0 +1,9 @@
+streamlit
+opencv-python
+ultralytics
+smtplib
+gdown
+Pillow
+numpy
+torch>=1.7.0
+torchvision
