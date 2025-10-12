@@ -47,7 +47,7 @@ YOLO_CLASSES = {
 
 @st.cache_resource
 def load_model():
-    model_path = 'mi_modelo_pesado.pt'
+    model_path = 'Eppv8.pt'
     if not os.path.isfile(model_path):
         # URL de descarga directa de Google Drive
         url = 'https://drive.google.com/uc?export=download&id=1MwuDl0ccFeL6R9ZV70icywD49mU0dr_e'
@@ -55,8 +55,7 @@ def load_model():
     model = YOLO(model_path)
     return model
 
-# Cargar el modelo
-model_path = load_model()
+
 
 class EPPDetector:
     def __init__(self, model_path):
@@ -249,7 +248,7 @@ def main():
     st.sidebar.header("⚙️ Configuración")
     
     # Cargar modelo
-    model_path = '../Eppv8.pt' #st.sidebar.text_input("Ruta del modelo YOLO:", value='../Project3-PPE-Detection/Eppv8.pt')
+    model_path = load_model()#'../Eppv8.pt' #st.sidebar.text_input("Ruta del modelo YOLO:", value='../Project3-PPE-Detection/Eppv8.pt')
     confidence = st.sidebar.slider("Umbral de confianza:", 0.1, 1.0, 0.5, 0.1)
     
     # Configuración de email
