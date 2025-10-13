@@ -752,9 +752,9 @@ def main():
     <div style='text-align: center; padding: 20px;'>
         <p style='font-size: 14px;'>
             🛡️ <b>Sistema de Detección EPP v2.0</b><br>
-            AGP Glass - Departamento HSE<br>
-            Desarrollado con ❤️ usando Streamlit + YOLO v8<br>
-            <i>Optimizado para Streamlit Cloud</i>
+             Departamento HSE<br>
+            Desarrollado por SAINECO<br>
+            <i>IA Aplicada</i>
         </p>
     </div>
     """, unsafe_allow_html=True)
